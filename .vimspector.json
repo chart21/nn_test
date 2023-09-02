@@ -1,0 +1,15 @@
+{
+    "configurations":{
+        "Launch":{
+            "adapter": "vscode-cpptools",
+            "configuration": {
+                "request": "launch",
+                "program": "custom_conv.o",
+                "cwd": "~/workspace/tests/conv/simple_nn",
+                "externalConsole":true,
+                "MiMode": "gdb",
+                "args": []
+            }
+        }
+    }
+}
