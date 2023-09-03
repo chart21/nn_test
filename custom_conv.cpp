@@ -4,7 +4,7 @@
 #include <sys/types.h>
 #include <vector>
 #include <chrono>
-#include <eigen/Eigen/Dense>
+#include <eigen3/Eigen/Dense>
 #include <random>
 #include "arch/DATATYPE.h"
 #include "config.h"

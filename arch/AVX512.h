@@ -34,6 +34,12 @@
 #define ZERO _mm512_setzero_si512()
 #define ONES _mm512_set1_epi32(-1)
 
+#if BITLENGTH == 32
+#define PROMOTE(x) _mm512_set1_epi32(x)
+#elif BITLENGTH == 64
+#define PROMOTE(x) _mm512_set1_epi64(x)
+#endif
+
 /* Defining macros */
 #define REG_SIZE 512
 #define CHUNK_SIZE 4096
