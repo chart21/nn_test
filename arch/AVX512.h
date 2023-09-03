@@ -12,7 +12,6 @@
 #include <stdint.h>
 #include <wmmintrin.h>
 #include "../config.h"
-#include "SSE.h"
 
 #ifndef AVX512
 #define AVX512
