@@ -214,6 +214,13 @@ this->s1 = 0;
 this->s2 = 0;
 }
 
+T get_s1(){
+    return this->s1;
+}
+
+T get_s2(){
+    return this->s2;
+}
 
 Share operator+(const Share s) const{
     return Share(this->s1 + s.s1, this->s2 + s.s2);
@@ -689,14 +696,18 @@ int main_old() {
 }
 
 template<typename T, typename U>
-MatX<T> runBenchmark(Conv2d<T>& conv, const MatX<U>& input, const MatX<U>& grad_out, int iterations = 1) {
+MatX<T> runBenchmark(Conv2d<T>& conv, const MatX<U>& input, const MatX<U>& grad_out, int iterations = 1, bool truncu = true) {
     // Forward pass
     for (int i = 0; i < iterations; ++i) {
         conv.forward(input, true);
          // Truncate the conv.output
-        for (int j = 0; j < conv.output.size(); j++) {
-            conv.output(j) = truncate(conv.output(j));
-        }
+
+        if (truncu == true) {
+            for (int j = 0; j < conv.output.size(); j++) {
+                conv.output(j) = truncate(conv.output(j));
+            }
+            
+    }
     }
 
     return conv.output;
@@ -731,6 +742,9 @@ int main() {
 
     Conv2d<D> d_conv(3, 64, 3, 1, "xavier_normal");
     d_conv.set_layer(input_shape);
+
+    Conv2d<uint64_t> combined_conv(3, 64, 3, 1, "xavier_normal");
+    combined_conv.set_layer(input_shape);
 
 
 
@@ -801,12 +815,18 @@ MatX<float> grad_out_from_s = grad_out_s.unaryExpr([](S val) { return val.reveal
 
 
 //check alternative to S with 2 individual matrices
-MatX<uint64_t> input_uint64_1 = float_input.unaryExpr([](float val) { return floatToFixed<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
-MatX<uint64_t> input_uint64_2 = float_input.unaryExpr([](float val) { return floatToFixed<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
-MatX<uint64_t> grad_out_uint64_1 = grad_out_float.unaryExpr([](float val) { return floatToFixed<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
-MatX<uint64_t> grad_out_uint64_2 = grad_out_float.unaryExpr([](float val) { return floatToFixed<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
 
+//set first matrix to input_s get s_1 for all indices
+MatX<uint64_t> input_s1 = input_s.unaryExpr([](S val) { return val.get_s1(); });
+MatX<uint64_t> grad_out_s1 = grad_out_s.unaryExpr([](S val) { return val.get_s1(); });
+MatX<uint64_t> input_s2 = input_s.unaryExpr([](S val) { return val.get_s2(); });
+MatX<uint64_t> grad_out_s2 = grad_out_s.unaryExpr([](S val) { return val.get_s2(); });
 
+MatX<uint64_t> sum_input_split = input_s1 + input_s2;
+MatX<uint64_t> sum_grad_out_split = grad_out_s1 + grad_out_s2;
+
+MatX<float> input_from_s_split = sum_input_split.unaryExpr([](uint64_t val) { return fixedToFloat<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
+MatX<float> grad_out_from_s_split = sum_grad_out_split.unaryExpr([](uint64_t val) { return fixedToFloat<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
 
 
 // Compare the matrices
@@ -819,6 +839,9 @@ float grad_out_diff_64 = (grad_out_float - grad_out_from_uint64).norm();
 float input_diff_s = (float_input - input_from_s).norm();
 float grad_out_diff_s = (grad_out_float - grad_out_from_s).norm();
 
+float input_diff_s_split = (float_input - input_from_s_split).norm();
+float grad_out_diff_s_split = (grad_out_float - grad_out_from_s_split).norm();
+
 std::cout << "Input difference between float and uint32_t: " << input_diff_32 << std::endl;
 std::cout << "Grad out difference between float and uint32_t: " << grad_out_diff_32 << std::endl;
 
@@ -828,6 +851,8 @@ std::cout << "Grad out difference between float and uint64_t: " << grad_out_diff
 std::cout << "Input difference between float and S: " << input_diff_s << std::endl;
 std::cout << "Grad out difference between float and S: " << grad_out_diff_s << std::endl;
 
+std::cout << "Input difference between float and S split: " << input_diff_s_split << std::endl;
+std::cout << "Grad out difference between float and S split: " << grad_out_diff_s_split << std::endl;
 
 
  // Benchmark and get the output for each datatype
@@ -836,57 +861,164 @@ std::cout << "Grad out difference between float and S: " << grad_out_diff_s << s
     std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
     MatX<float> output_float = runBenchmark(float_conv, float_input, grad_out_float);
     std::chrono::high_resolution_clock::time_point t2 = std::chrono::high_resolution_clock::now();
-    auto duration_float = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
-    std::cout << "Float convolution took " << duration_float << " microseconds" << std::endl;
+    auto duration_float = std::chrono::duration_cast<std::chrono::milliseconds>( t2 - t1 ).count();
+    std::cout << "Float convolution took " << duration_float << " milliseconds" << std::endl;
     
     std::chrono::high_resolution_clock::time_point t3 = std::chrono::high_resolution_clock::now();
     MatX<uint32_t> output_uint32 = runBenchmark(uint32_conv, input_uint32, grad_out_uint32);
     std::chrono::high_resolution_clock::time_point t4 = std::chrono::high_resolution_clock::now();
-    auto duration_uint32 = std::chrono::duration_cast<std::chrono::microseconds>( t4 - t3 ).count();
-    std::cout << "Uint32_t convolution took " << duration_uint32 << " microseconds" << std::endl;
+    auto duration_uint32 = std::chrono::duration_cast<std::chrono::milliseconds>( t4 - t3 ).count();
+    std::cout << "Uint32_t convolution took " << duration_uint32 << " milliseconds" << std::endl;
 
     std::chrono::high_resolution_clock::time_point t5 = std::chrono::high_resolution_clock::now();
     MatX<uint64_t> output_uint64 = runBenchmark(uint64_conv, input_uint64, grad_out_uint64);
     std::chrono::high_resolution_clock::time_point t6 = std::chrono::high_resolution_clock::now();
-    auto duration_uint64 = std::chrono::duration_cast<std::chrono::microseconds>( t6 - t5 ).count();
-    std::cout << "Uint64_t convolution took " << duration_uint64 << " microseconds" << std::endl;
+    auto duration_uint64 = std::chrono::duration_cast<std::chrono::milliseconds>( t6 - t5 ).count();
+    std::cout << "Uint64_t convolution took " << duration_uint64 << " milliseconds" << std::endl;
+    
+
+    std::chrono::high_resolution_clock::time_point t9 = std::chrono::high_resolution_clock::now();
+    MatX<uint64_t> output_uint64_1 = runBenchmark(combined_conv, input_s1, grad_out_s1,1,false);
+    MatX<uint64_t> output_uint64_2 = runBenchmark(combined_conv, input_s1, grad_out_s2,1,false);
+    MatX<uint64_t> output_uint64_3 = runBenchmark(combined_conv, input_s2, grad_out_s1,1,false);
+    MatX<uint64_t> output_uint64_4 = runBenchmark(combined_conv, input_s2, grad_out_s2,1,false);
+    MatX<uint64_t> output_mat = output_uint64_1 + output_uint64_2 + output_uint64_3 + output_uint64_4;
+        for (int j = 0; j < output_mat.size(); j++) {
+            output_mat(j) = truncate(output_mat(j));
+        }
+    std::chrono::high_resolution_clock::time_point t10 = std::chrono::high_resolution_clock::now();
+    auto duration_uint64_1 = std::chrono::duration_cast<std::chrono::milliseconds>( t10 - t9 ).count();
+    std::cout << "Combined Convolution took " << duration_uint64_1 << " milliseconds" << std::endl;
 
     std::chrono::high_resolution_clock::time_point t7 = std::chrono::high_resolution_clock::now();
     MatX<S> output_s = runBenchmark(s_conv, input_s, grad_out_s);
     std::chrono::high_resolution_clock::time_point t8 = std::chrono::high_resolution_clock::now();
-    auto duration_s = std::chrono::duration_cast<std::chrono::microseconds>( t8 - t7 ).count();
-    std::cout << "S convolution took " << duration_s << " microseconds" << std::endl;
+    auto duration_s = std::chrono::duration_cast<std::chrono::milliseconds>( t8 - t7 ).count();
+    std::cout << "S convolution took " << duration_s << " milliseconds" << std::endl;
     
-    std::chrono::high_resolution_clock::time_point t9 = std::chrono::high_resolution_clock::now();
-    MatX<uint64_t> output_uint64_1 = runBenchmark(uint64_conv, input_uint64_1, grad_out_uint64_1);
-    MatX<uint64_t> output_uint64_2 = runBenchmark(uint64_conv, input_uint64_2, grad_out_uint64_2);
-    MatX<uint64_t> output_uint64_3 = runBenchmark(uint64_conv2, input_uint64_1, grad_out_uint64_1);
-    MatX<uint64_t> output_uint64_4 = runBenchmark(uint64_conv2, input_uint64_2, grad_out_uint64_1);
-    MatX<uint64_t> output_mat = output_uint64_1 + output_uint64_2 + output_uint64_3 + output_uint64_4;
-    std::chrono::high_resolution_clock::time_point t10 = std::chrono::high_resolution_clock::now();
-    auto duration_uint64_1 = std::chrono::duration_cast<std::chrono::microseconds>( t10 - t9 ).count();
-    std::cout << "Combined Convolution took " << duration_uint64_1 << " microseconds" << std::endl;
     // Convert output_uint32 and output_uint64 back to float
+    
     MatX<float> output_from_uint32 = output_uint32.unaryExpr([](uint32_t val) { return fixedToFloat<float, uint32_t, SOME_FRACTIONAL_VALUE>(val); });
     MatX<float> output_from_uint64 = output_uint64.unaryExpr([](uint64_t val) { return fixedToFloat<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
+    MatX<float> output_from_mat = output_mat.unaryExpr([](uint64_t val) { return fixedToFloat<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
     MatX<float> output_from_s = output_s.unaryExpr([](S val) { return val.reveal_float<float, ANOTHER_FRACTIONAL_VALUE>() ; });
-    
+
     std::chrono::high_resolution_clock::time_point t11 = std::chrono::high_resolution_clock::now();
     runBenchmark(d_conv, input_d, grad_out_d);
     std::chrono::high_resolution_clock::time_point t12 = std::chrono::high_resolution_clock::now();
-    auto duration_d = std::chrono::duration_cast<std::chrono::microseconds>( t12 - t11 ).count();
-    std::cout << "Intrinsics convolution took " << duration_d << " microseconds" << std::endl;
+    auto duration_d = std::chrono::duration_cast<std::chrono::milliseconds>( t12 - t11 ).count();
+    std::cout << "Intrinsics convolution took " << duration_d << " milliseconds" << std::endl;
 
     // Compare the results
     // NOTE: Due to floating point inaccuracies and the nature of fixed point arithmetic, it's recommended to use a small epsilon value for comparison.
 
-    float avg_error_32 = (output_float - output_from_uint32).cwiseAbs().sum() / output_float.size();
+float avg_error_32 = (output_float - output_from_uint32).cwiseAbs().sum() / output_float.size();
 float avg_error_64 = (output_float - output_from_uint64).cwiseAbs().sum() / output_float.size();
+float avg_error_mat = (output_float - output_from_mat).cwiseAbs().sum() / output_float.size();
 float avg_error_s = (output_float - output_from_s).cwiseAbs().sum() / output_float.size();
 
 std::cout << "Average error between float and uint32_t results: " << avg_error_32 << std::endl;
 std::cout << "Average error between float and uint64_t results: " << avg_error_64 << std::endl;
+std::cout << "Average error between float and combined results: " << avg_error_mat << std::endl;
 std::cout << "Average error between float and S results: " << avg_error_s << std::endl;
+
+
+
+
+    // Set gradient for benchmarking backward pass
+    float_conv.delta = grad_out_float;
+    // Benchmark for backward pass
+    /* MatX<float> prev_delta(input_shape[1], input_shape[2] * input_shape[3]); */
+    auto start_time = chrono::high_resolution_clock::now();
+        float_conv.backward(float_input, grad_out_float);
+    auto end_time = chrono::high_resolution_clock::now();
+    auto elapsed_backward = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+    cout << "Float: Time for backward pass: " << elapsed_backward.count() << " ms." << endl;
+
+    uint32_conv.delta = grad_out_uint32;
+    /* MatX<uint32_t> prev_delta_uint32(input_shape[1], input_shape[2] * input_shape[3]); */
+    start_time = chrono::high_resolution_clock::now();
+        uint32_conv.backward(input_uint32, grad_out_uint32);
+                for (int j = 0; j < uint32_conv.kernel.size(); j++) {
+            uint32_conv.kernel(j) = truncate(uint32_conv.kernel(j));
+        }
+
+    end_time = chrono::high_resolution_clock::now();
+    elapsed_backward = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+    cout << "32 uint: Time for backward pass: " << elapsed_backward.count() << " ms." << endl;
+
+    uint64_conv.delta = grad_out_uint64;
+    /* MatX<uint64_t> prev_delta_uint64(input_shape[1], input_shape[2] * input_shape[3]); */
+    start_time = chrono::high_resolution_clock::now();
+        uint64_conv.backward(input_uint64, grad_out_uint64);
+                for (int j = 0; j < uint64_conv.kernel.size(); j++) {
+            uint64_conv.kernel(j) = truncate(uint64_conv.kernel(j));
+        }
+    end_time = chrono::high_resolution_clock::now();
+    elapsed_backward = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+    cout << "64 uint: Time for backward pass: " << elapsed_backward.count() << " ms." << endl;
+
+    s_conv.delta = grad_out_s;
+    /* MatX<S> prev_delta_s(input_shape[1], input_shape[2] * input_shape[3]); */
+    start_time = chrono::high_resolution_clock::now();
+        s_conv.backward(input_s, grad_out_s);
+                        for (int j = 0; j < s_conv.kernel.size(); j++) {
+            s_conv.kernel(j) = truncate(s_conv.kernel(j));
+        }
+
+    end_time = chrono::high_resolution_clock::now();
+    elapsed_backward = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+    cout << "Share (uint64): Time for backward pass: " << elapsed_backward.count() << " ms." << endl;
+
+    // Combined backward pass
+    MatX<uint64_t> s_conv_delta1 = s_conv.delta.unaryExpr([](S val) { return val.get_s1(); });
+    MatX<uint64_t> s_conv_delta2 = s_conv.delta.unaryExpr([](S val) { return val.get_s2(); });
+    input_s1 = input_s.unaryExpr([](S val) { return val.get_s1(); });
+    input_s2 = input_s.unaryExpr([](S val) { return val.get_s2(); });
+    start_time = chrono::high_resolution_clock::now();
+        combined_conv.backward(input_s1, s_conv_delta1);
+        combined_conv.backward(input_s1, s_conv_delta2);
+        combined_conv.backward(input_s2, s_conv_delta1);
+        combined_conv.backward(input_s2, s_conv_delta2);
+                        for (int j = 0; j < combined_conv.kernel.size(); j++) {
+            combined_conv.kernel(j) = truncate(combined_conv.kernel(j));
+        }
+    end_time = chrono::high_resolution_clock::now();
+
+    std::cout << "Combined backward pass: " << chrono::duration_cast<chrono::milliseconds>(end_time - start_time).count() << " ms." << endl;
+
+    d_conv.delta = grad_out_d;
+    /* MatX<D> prev_delta_d(input_shape[1], input_shape[2] * input_shape[3]); */
+    start_time = chrono::high_resolution_clock::now();
+        d_conv.backward(input_d, d_conv.delta);
+    end_time = chrono::high_resolution_clock::now();
+    elapsed_backward = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+    cout << "Intrinsics: Time for backward pass: " << elapsed_backward.count() << " ms." << endl;
+    
+    
+    MatX<float> prev_delta_from_uint32 = uint32_conv.kernel.unaryExpr([](uint32_t val) { return fixedToFloat<float, uint32_t, SOME_FRACTIONAL_VALUE>(val); });
+    MatX<float> prev_delta_from_uint64 = uint64_conv.kernel.unaryExpr([](uint64_t val) { return fixedToFloat<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
+
+    MatX<float> prev_delta_from_combined = combined_conv.kernel.unaryExpr([](uint64_t val) { return fixedToFloat<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
+
+    MatX<float> prev_delta_from_s = s_conv.kernel.unaryExpr([](S val) { return val.reveal_float<float, ANOTHER_FRACTIONAL_VALUE>(); }); 
+
+
+    avg_error_32 = (prev_delta_from_uint32 - float_conv.kernel).cwiseAbs().sum() / prev_delta_from_uint32.size();
+    avg_error_64 = (prev_delta_from_uint64 - float_conv.kernel).cwiseAbs().sum() / prev_delta_from_uint64.size();
+    avg_error_s = (prev_delta_from_s - float_conv.kernel).cwiseAbs().sum() / prev_delta_from_s.size();
+    avg_error_mat = (prev_delta_from_combined - float_conv.kernel).cwiseAbs().sum() / prev_delta_from_combined.size();
+
+
+    cout << "Average error between float and uint32_t results: " << avg_error_32 << endl;
+    cout << "Average error between float and uint64_t results: " << avg_error_64 << endl;
+    cout << "Average error between float and S results: " << avg_error_s << endl;
+    cout << "Average error between float and combined results: " << avg_error_mat << endl;
+
+
+
+
+
 
     return 0;
 
