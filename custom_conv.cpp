@@ -7,7 +7,7 @@
 #include <eigen/Eigen/Dense>
 #include <random>
 #include "arch/DATATYPE.h"
-#include "arch/SSE.h"
+#include "config.h"
 
 #define SOME_FRACTIONAL_VALUE 14
 #define ANOTHER_FRACTIONAL_VALUE 28
@@ -89,43 +89,38 @@ uint64_t truncate(const uint64_t& val) {
     temp >>= ANOTHER_FRACTIONAL_VALUE;
     return static_cast<uint64_t>(temp);
 }
+
+
 template <typename T>
 class SH{
 DATATYPE s1;
 DATATYPE s2;
     public:
 
-SH(T s){
-this->s2 = SET_ALL_ONE();
-this->s1 = SET_ALL_ONE();
+
+
+static SH get_S(UINT_TYPE val){
+SH s;
+UINT_TYPE s_arr[sizeof(T)/sizeof(UINT_TYPE)] = {val};
+UINT_TYPE r_arr[sizeof(T)/sizeof(UINT_TYPE)];
+for(int i = 0; i < sizeof(T)/sizeof(UINT_TYPE); i++){
+    r_arr[i] = rand();
 }
+orthogonalize_arithmetic(s_arr, &s.s1 , 1);
+orthogonalize_arithmetic(r_arr, &s.s2 , 1);
+s.s1 = OP_SUB(s.s1, s.s2);
+return s;
+}
+
+SH(UINT_TYPE val){
+UINT_TYPE s_arr[sizeof(T)/sizeof(UINT_TYPE)] = {val};
+orthogonalize_arithmetic(s_arr, &s1 , 1);
+s2 = SET_ALL_ZERO();
+}
+
+
 
 SH(T s1, T s2){
-this->s2 = SET_ALL_ONE();
-this->s1 = SET_ALL_ONE();
-}
-
-
-
-
-SH(int s){
-this->s2 = SET_ALL_ONE();
-this->s1 = SET_ALL_ONE();
-}
-
-SH(float s){
-this->s2 = SET_ALL_ONE();
-this->s1 = SET_ALL_ONE();
-}
-
-SH(DATATYPE s){
-this->s2 = SET_ALL_ONE();
-this->s1 = SET_ALL_ONE();
-}
-
-
-
-SH(DATATYPE s1, DATATYPE s2){
 this->s1 = s1;
 this->s2 = s2;
 }
@@ -151,12 +146,13 @@ SH operator*(const SH s) const{
     return SH(ls1, ls2);
 }
 
-SH operator*(const int s) const{
-    return SH( OP_MULT( this->s1, this->s2));
+SH operator*(const UINT_TYPE s) const{
+    return SH(OP_MULT(s1, PROMOTE(s)), OP_MULT(s2, PROMOTE(s)));
 }
 
-SH operator/(const int s) const{
-    return SH( OP_MULT(this->s1,  this->s2));
+SH operator/(const UINT_TYPE s) const{
+    /* return SH(OP_DIV(s1, PROMOTE(s)), OP_DIV(s2, PROMOTE(s))); */ // not supported for now
+    return SH();
 }
 
 void operator+=(const SH s){
@@ -181,17 +177,26 @@ bool operator==(const SH& other) const {
 }
 
 SH trunc_local() const{
-    return SH();
+    return SH(OP_TRUNC(s1), OP_TRUNC(s2));
 }
 
 template<typename float_type, int fractional>
 float_type reveal_float() const{
-    float_type s = 0;
-    return s;
+
+    UINT_TYPE s_arr[sizeof(T)/sizeof(UINT_TYPE)];
+    T temp = OP_ADD(s1, s2);
+    unorthogonalize_arithmetic(&temp, s_arr, 1);
+    float_type result = fixedToFloat<float_type, UINT_TYPE, fractional>(s_arr[0]);
+    return result;
     }
+
 
 };
 
+template<typename T>
+SH<T> truncate(const SH<T>& val) {
+    return val.trunc_local();
+}
 
 
 template<typename T>
@@ -281,7 +286,8 @@ float_type reveal_float() const{
 };
 
 using S = Share<uint64_t>;
-using D = SH<uint64_t>;
+using S32 = Share<uint32_t>;
+using D = SH<DATATYPE>;
 
 template<typename T>
 using MatX = Matrix<T, Dynamic, Dynamic, RowMajor>;
@@ -377,6 +383,20 @@ void init_weight<S>(MatX<S>& W, int fan_in, int fan_out, string option) {
     }
 }
 
+// Specialization for S
+template<>
+void init_weight<S32>(MatX<S32>& W, int fan_in, int fan_out, string option) {
+    std::cout << "init_weight<S32> called" << std::endl;
+    MatX<float> W_float(W.rows(), W.cols());
+    init_weight<float>(W_float, fan_in, fan_out, option);
+
+    for (int i = 0; i < W_float.rows(); ++i) {
+        for (int j = 0; j < W_float.cols(); ++j) {
+            W(i, j) = S32(floatToFixed<float, uint32_t, SOME_FRACTIONAL_VALUE>(W_float(i, j)));
+        }
+    }
+}
+
 //Specificalization for D
 template<>
 void init_weight<D>(MatX<D>& W, int fan_in, int fan_out, string option) {
@@ -386,7 +406,7 @@ void init_weight<D>(MatX<D>& W, int fan_in, int fan_out, string option) {
 
     for (int i = 0; i < W_float.rows(); ++i) {
         for (int j = 0; j < W_float.cols(); ++j) {
-            W(i, j) = D(floatToFixed<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(W_float(i, j)));
+            W(i, j) = D::get_S(floatToFixed<float, uint32_t, SOME_FRACTIONAL_VALUE>(W_float(i, j)));
         }
     }
 }
@@ -417,7 +437,7 @@ void init_weight<uint32_t>(MatX<uint32_t>& W, int fan_in, int fan_out, string op
     row -= pad;
     col -= pad;
 
-    if (row < 0 || col < 0 || row >= height || col >= width) return 0;
+    if (row < 0 || col < 0 || row >= height || col >= width) return T(0); // public value, no rand needed
     return im[col + width * (row + height * channel)];
 }
 
@@ -633,8 +653,10 @@ class Conv2d : public Layer<T>
     template<typename T>
 	void Conv2d<T>::update_weight(T lr, T decay)
 	{
-		T t1 = (T(1) - (lr * decay * 2) / batch);
-		T t2 = lr / batch;
+		/* T t1 = (T(1) - (lr * decay * 2) / batch); // can be optimized to shifts */ //deactivate for debugging purposes
+		/* T t2 = lr / batch; // can be optimized to shifts */
+		T t1 = (T(1) - (lr * decay * 2)); // debugging
+		T t2 = lr; // debugging
 
 			kernel *= t1;
 			bias *= t1;
@@ -736,6 +758,9 @@ int main() {
     Conv2d<S> s_conv(3, 64, 3, 1, "xavier_normal");
     s_conv.set_layer(input_shape);
 
+    Conv2d<S32> s32_conv(3, 64, 3, 1, "xavier_normal");
+    s32_conv.set_layer(input_shape);
+
     //check alternative to S with 2 individual matrices
     Conv2d<uint64_t> uint64_conv2(3, 64, 3, 1, "xavier_normal");
     uint64_conv2.set_layer(input_shape);
@@ -773,6 +798,18 @@ int main() {
     MatX<float> bias_diff_matrix_s = s_conv.bias.unaryExpr([](S val) { return val.reveal_float<float, ANOTHER_FRACTIONAL_VALUE>(); }) - float_conv.bias;
     float bias_diff_s = bias_diff_matrix_s.norm();
 
+    MatX<float> weight_diff_matrix_s32 = s32_conv.kernel.unaryExpr([](S32 val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>(); }) - float_conv.kernel;
+    float weight_diff_s32 = weight_diff_matrix_s32.norm();
+
+    MatX<float> bias_diff_matrix_s32 = s32_conv.bias.unaryExpr([](S32 val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>(); }) - float_conv.bias;
+    float bias_diff_s32 = bias_diff_matrix_s32.norm();
+
+    MatX<float> weight_diff_matrix_d = d_conv.kernel.unaryExpr([](D val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>(); }) - float_conv.kernel;
+    float weight_diff_d = weight_diff_matrix_d.norm();
+
+    MatX<float> bias_diff_matrix_d = d_conv.bias.unaryExpr([](D val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>(); }) - float_conv.bias;
+    float bias_diff_d = bias_diff_matrix_d.norm();
+
     // Output comparisons
     std::cout << "Weight difference between float and uint32_t: " << weight_diff_32 << std::endl;
     std::cout << "Bias difference between float and uint32_t: " << bias_diff_32 << std::endl;
@@ -780,6 +817,10 @@ int main() {
     std::cout << "Bias difference between float and uint64_t: " << bias_diff_64 << std::endl;
     std::cout << "Weight difference between float and S: " << weight_diff_s << std::endl;
     std::cout << "Bias difference between float and S: " << bias_diff_s << std::endl;
+    std::cout << "Weight difference between float and S32: " << weight_diff_s32 << std::endl;
+    std::cout << "Bias difference between float and S32: " << bias_diff_s32 << std::endl;
+    std::cout << "Weight difference between float and D: " << weight_diff_d << std::endl;
+    std::cout << "Bias difference between float and D: " << bias_diff_d << std::endl;
 
 
 
@@ -799,9 +840,13 @@ MatX<S> input_s = float_input.unaryExpr([](float val) { return S( floatToFixed<f
 
 MatX<S> grad_out_s = grad_out_float.unaryExpr([](float val) { return S( floatToFixed<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val)); });
 
-MatX<D> input_d = float_input.unaryExpr([](float val) { return D( floatToFixed<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val)); });
+MatX<S32> input_s32 = float_input.unaryExpr([](float val) { return S32( floatToFixed<float, uint32_t, SOME_FRACTIONAL_VALUE>(val)); });
 
-MatX<D> grad_out_d = grad_out_float.unaryExpr([](float val) { return D( floatToFixed<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val)); });
+MatX<S32> grad_out_s32 = grad_out_float.unaryExpr([](float val) { return S32( floatToFixed<float, uint32_t, SOME_FRACTIONAL_VALUE>(val)); });
+
+MatX<D> input_d = float_input.unaryExpr([](float val) { return D( floatToFixed<float, uint32_t, SOME_FRACTIONAL_VALUE>(val)); });
+
+MatX<D> grad_out_d = grad_out_float.unaryExpr([](float val) { return D( floatToFixed<float, uint32_t, SOME_FRACTIONAL_VALUE>(val)); });
 
 // Convert uint32_t and uint64_t matrices back to float for comparison
 MatX<float> input_from_uint32 = input_uint32.unaryExpr([](uint32_t val) { return fixedToFloat<float, uint32_t, SOME_FRACTIONAL_VALUE>(val); });
@@ -813,6 +858,11 @@ MatX<float> grad_out_from_uint64 = grad_out_uint64.unaryExpr([](uint64_t val) { 
 MatX<float> input_from_s = input_s.unaryExpr([](S val) { return val.reveal_float<float, ANOTHER_FRACTIONAL_VALUE>(); });
 MatX<float> grad_out_from_s = grad_out_s.unaryExpr([](S val) { return val.reveal_float<float, ANOTHER_FRACTIONAL_VALUE>(); });
 
+MatX<float> input_from_s32 = input_s32.unaryExpr([](S32 val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>(); });
+MatX<float> grad_out_from_s32 = grad_out_s32.unaryExpr([](S32 val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>(); });
+
+MatX<float> input_from_d = input_d.unaryExpr([](D val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>(); });
+MatX<float> grad_out_from_d = grad_out_d.unaryExpr([](D val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>(); });
 
 //check alternative to S with 2 individual matrices
 
@@ -842,6 +892,12 @@ float grad_out_diff_s = (grad_out_float - grad_out_from_s).norm();
 float input_diff_s_split = (float_input - input_from_s_split).norm();
 float grad_out_diff_s_split = (grad_out_float - grad_out_from_s_split).norm();
 
+float input_diff_s32 = (float_input - input_from_s32).norm();
+float grad_out_diff_s32 = (grad_out_float - grad_out_from_s32).norm();
+
+float input_diff_d = (float_input - input_from_d).norm();
+float grad_out_diff_d = (grad_out_float - grad_out_from_d).norm();
+
 std::cout << "Input difference between float and uint32_t: " << input_diff_32 << std::endl;
 std::cout << "Grad out difference between float and uint32_t: " << grad_out_diff_32 << std::endl;
 
@@ -853,6 +909,12 @@ std::cout << "Grad out difference between float and S: " << grad_out_diff_s << s
 
 std::cout << "Input difference between float and S split: " << input_diff_s_split << std::endl;
 std::cout << "Grad out difference between float and S split: " << grad_out_diff_s_split << std::endl;
+
+std::cout << "Input difference between float and D: " << input_diff_d << std::endl;
+std::cout << "Grad out difference between float and D: " << grad_out_diff_d << std::endl;
+
+std::cout << "Input difference between float and S uint32_t: " << input_diff_s32 << std::endl;
+std::cout << "Grad out difference between float and S uint32_t: " << grad_out_diff_s32 << std::endl;
 
 
  // Benchmark and get the output for each datatype
@@ -895,32 +957,46 @@ std::cout << "Grad out difference between float and S split: " << grad_out_diff_
     std::chrono::high_resolution_clock::time_point t8 = std::chrono::high_resolution_clock::now();
     auto duration_s = std::chrono::duration_cast<std::chrono::milliseconds>( t8 - t7 ).count();
     std::cout << "S convolution took " << duration_s << " milliseconds" << std::endl;
+
+    std::chrono::high_resolution_clock::time_point t13 = std::chrono::high_resolution_clock::now();
+    MatX<S32> output_s32 = runBenchmark(s32_conv, input_s32, grad_out_s32);
+    std::chrono::high_resolution_clock::time_point t14 = std::chrono::high_resolution_clock::now();
+    auto duration_s32 = std::chrono::duration_cast<std::chrono::milliseconds>( t14 - t13 ).count();
+    std::cout << "S32 convolution took " << duration_s32 << " milliseconds" << std::endl;
+
     
     // Convert output_uint32 and output_uint64 back to float
     
-    MatX<float> output_from_uint32 = output_uint32.unaryExpr([](uint32_t val) { return fixedToFloat<float, uint32_t, SOME_FRACTIONAL_VALUE>(val); });
-    MatX<float> output_from_uint64 = output_uint64.unaryExpr([](uint64_t val) { return fixedToFloat<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
-    MatX<float> output_from_mat = output_mat.unaryExpr([](uint64_t val) { return fixedToFloat<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
-    MatX<float> output_from_s = output_s.unaryExpr([](S val) { return val.reveal_float<float, ANOTHER_FRACTIONAL_VALUE>() ; });
 
     std::chrono::high_resolution_clock::time_point t11 = std::chrono::high_resolution_clock::now();
-    runBenchmark(d_conv, input_d, grad_out_d);
+    MatX<D> output_d = runBenchmark(d_conv, input_d, grad_out_d);
     std::chrono::high_resolution_clock::time_point t12 = std::chrono::high_resolution_clock::now();
     auto duration_d = std::chrono::duration_cast<std::chrono::milliseconds>( t12 - t11 ).count();
     std::cout << "Intrinsics convolution took " << duration_d << " milliseconds" << std::endl;
 
     // Compare the results
     // NOTE: Due to floating point inaccuracies and the nature of fixed point arithmetic, it's recommended to use a small epsilon value for comparison.
+    MatX<float> output_from_uint32 = output_uint32.unaryExpr([](uint32_t val) { return fixedToFloat<float, uint32_t, SOME_FRACTIONAL_VALUE>(val); });
+    MatX<float> output_from_uint64 = output_uint64.unaryExpr([](uint64_t val) { return fixedToFloat<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
+    MatX<float> output_from_mat = output_mat.unaryExpr([](uint64_t val) { return fixedToFloat<float, uint64_t, ANOTHER_FRACTIONAL_VALUE>(val); });
+    MatX<float> output_from_s = output_s.unaryExpr([](S val) { return val.reveal_float<float, ANOTHER_FRACTIONAL_VALUE>() ; });
+    MatX<float> output_from_s32 = output_s32.unaryExpr([](S32 val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>() ; });
+    MatX<float> output_from_d = output_d.unaryExpr([](D val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>() ; });
+
 
 float avg_error_32 = (output_float - output_from_uint32).cwiseAbs().sum() / output_float.size();
 float avg_error_64 = (output_float - output_from_uint64).cwiseAbs().sum() / output_float.size();
 float avg_error_mat = (output_float - output_from_mat).cwiseAbs().sum() / output_float.size();
 float avg_error_s = (output_float - output_from_s).cwiseAbs().sum() / output_float.size();
+float avg_error_s32 = (output_float - output_from_s32).cwiseAbs().sum() / output_float.size();
+float avg_error_d = (output_float - output_from_d).cwiseAbs().sum() / output_float.size();
 
 std::cout << "Average error between float and uint32_t results: " << avg_error_32 << std::endl;
 std::cout << "Average error between float and uint64_t results: " << avg_error_64 << std::endl;
 std::cout << "Average error between float and combined results: " << avg_error_mat << std::endl;
 std::cout << "Average error between float and S results: " << avg_error_s << std::endl;
+std::cout << "Average error between float and S32 results: " << avg_error_s32 << std::endl;
+std::cout << "Average error between float and D results: " << avg_error_d << std::endl;
 
 
 
@@ -1003,17 +1079,21 @@ std::cout << "Average error between float and S results: " << avg_error_s << std
 
     MatX<float> prev_delta_from_s = s_conv.kernel.unaryExpr([](S val) { return val.reveal_float<float, ANOTHER_FRACTIONAL_VALUE>(); }); 
 
+    MatX<float> prev_delta_from_d = d_conv.kernel.unaryExpr([](D val) { return val.reveal_float<float, SOME_FRACTIONAL_VALUE>(); });
+
 
     avg_error_32 = (prev_delta_from_uint32 - float_conv.kernel).cwiseAbs().sum() / prev_delta_from_uint32.size();
     avg_error_64 = (prev_delta_from_uint64 - float_conv.kernel).cwiseAbs().sum() / prev_delta_from_uint64.size();
     avg_error_s = (prev_delta_from_s - float_conv.kernel).cwiseAbs().sum() / prev_delta_from_s.size();
     avg_error_mat = (prev_delta_from_combined - float_conv.kernel).cwiseAbs().sum() / prev_delta_from_combined.size();
+    avg_error_d = (prev_delta_from_d - float_conv.kernel).cwiseAbs().sum() / prev_delta_from_d.size();
 
 
     cout << "Average error between float and uint32_t results: " << avg_error_32 << endl;
     cout << "Average error between float and uint64_t results: " << avg_error_64 << endl;
     cout << "Average error between float and S results: " << avg_error_s << endl;
     cout << "Average error between float and combined results: " << avg_error_mat << endl;
+    cout << "Average error between float and D results: " << avg_error_d << endl;
 
 
 

@@ -55,7 +55,7 @@
 // Print additional info?
 #define PRINT 0
 
-#define FRACTIONAL 28 // fractional bits for fixed point numbers
+#define FRACTIONAL 14 // fractional bits for fixed point numbers
 
 // Starting port for required port range of the sockets
 #define BASE_PORT 11000
